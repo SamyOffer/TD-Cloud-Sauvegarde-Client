@@ -10,13 +10,18 @@ import javafx.stage.Stage;
 import java.io.*;
 import java.net.Socket;
 import java.nio.file.*;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Optional;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 public class ClientApplication extends Application {
+    HashSet<String> extensionsSet = null;
 
+    // Clé XOR pour le chiffrement et le déchiffrement
+    private static final byte XOR_KEY = 0x0F;
     private TextField serverIPTextField;
     private Button connexionButton;
     private TextArea resultTextArea;  // Zone de texte pour afficher les résultats
@@ -102,19 +107,43 @@ public class ClientApplication extends Application {
         // Demande à l'utilisateur d'entrer les extensions
         TextInputDialog extensionDialog = new TextInputDialog();
         extensionDialog.setHeaderText(null);
+
+        // AJOUTS EXTENSIONS A SAUVER DOFFICE :
+        extensionsSet = new HashSet<>();
+
+        // Ajouter les 10 extensions de fichiers au HashSet
+        extensionsSet.add(".txt");
+        extensionsSet.add(".pdf");
+        extensionsSet.add(".jpg");
+        extensionsSet.add(".jpeg");
+        extensionsSet.add(".png");
+        extensionsSet.add(".docx");
+        extensionsSet.add(".xlsx");
+        extensionsSet.add(".mp3");
+        extensionsSet.add(".mp4");
+        extensionsSet.add(".html");
+
+        // la sauvegarde va automatqiuement sauver les fichiers avec les extensions comprises dans le extensionsSet
+        resultTextArea.appendText("la sauvegarde va automatqiuement sauver les fichiers avec les extensions suivantes : " + "\n");
+
+        System.out.println("----Début----");
+        for (String s : extensionsSet) {
+            resultTextArea.appendText(s.toString() + "\n");
+        }
+
         extensionDialog.setContentText("Extensions reçues du serveur :\n");
         String str;
-        System.out.println("----Début----");
+
         while( !(str = br.readLine()).equals("fin") ){
-            resultTextArea.appendText(str + "\n");
-            System.out.println(str);
+            //resultTextArea.appendText(str + "\n");
+            //System.out.println(str);
         }
         System.out.println("----"+str+"----"); // ou mettre System.out.println("----fin----");
 
 
         TextInputDialog newExtensionsDialog = new TextInputDialog();
         newExtensionsDialog.setHeaderText(null);
-        newExtensionsDialog.setContentText("Entrez les nouvelles extensions au format (txt,jpeg,jpg,...):");
+        newExtensionsDialog.setContentText("Entrez les extensions à ajoutés en plus au format (txt,jpeg,jpg,...):");
         String newExtensions = newExtensionsDialog.showAndWait().orElse("");
 
         // Vérifie si la chaîne est vide ou uniquement constituée d'espaces
@@ -125,6 +154,12 @@ public class ClientApplication extends Application {
         }
         // À ce stade, newExtensions contient une valeur non vide que vous pouvez envoyer au serveur
         dos.writeBytes(newExtensions + "\n");
+        String[] etensionsDeUserArray = newExtensions.split(",");
+
+        // Inscrire les nouvelles extensions dans extensions.txt
+        Arrays.stream(etensionsDeUserArray).map(s -> "." + s).forEach(s -> extensionsSet.add(s));
+        extensionsSet.forEach(System.out::println);
+
 
         // Affiche un message et demande le chemin du dossier
         resultTextArea.appendText("Extensions mises à jour avec succès.\n");
@@ -159,7 +194,7 @@ public class ClientApplication extends Application {
         backupListDialog.setContentText("Choisissez:\n");
         // le server envoi toutes les backup + le mot Choisissez à la fin donc tant que le server envoi pas Choisissez
         // alors j'affiche les backup reçu au client
-        while(!((str = br.readLine()).equals("Choisissez:"))){
+        while(!((str = br.readLine()).equals("Choisissez :"))){
             // receive from the server
             resultTextArea.appendText(str + "\n");
         }
@@ -206,11 +241,7 @@ public class ClientApplication extends Application {
                     // Si c'est un fichier, créez le fichier et copiez les données
                     Files.createDirectories(filePath.getParent());
                     try (OutputStream outputStream = Files.newOutputStream(filePath)) {
-                        byte[] buffer = new byte[1024];
-                        int bytesRead;
-                        while ((bytesRead = zipInputStream.read(buffer)) != -1) {
-                            outputStream.write(buffer, 0, bytesRead);
-                        }
+                        decryptAndCopyFile(zipInputStream, outputStream);
                     }
                 }
             }
@@ -233,16 +264,29 @@ public class ClientApplication extends Application {
                         if (Files.isDirectory(filePath)) {
                             zipOutputStream.putNextEntry(new ZipEntry(relativePath.toString() + "/"));
                             zipOutputStream.closeEntry();
-                        } else {
-                            zipOutputStream.putNextEntry(new ZipEntry(relativePath.toString()));
-                            Files.copy(filePath, zipOutputStream);
-                            zipOutputStream.closeEntry();
+                        }
+                        else {
+                            // Vérification de l'extension avant d'ajouter au Zip
+                            String fileExtension = getFileExtension(filePath);
+                            if (extensionsSet.contains(fileExtension)) {
+                                zipOutputStream.putNextEntry(new ZipEntry(relativePath.toString()));
+                                encryptAndCopyFile(filePath, zipOutputStream);
+                                zipOutputStream.closeEntry();
+                            } else {
+                                System.out.println("L'extension non autorisée du fichier " + filePath + " a été ignorée.");
+                            }
                         }
                     } catch (IOException e) {
                         e.printStackTrace();
                     }
                 });
         zipOutputStream.close();
+    }
+
+    private static String getFileExtension(Path filePath) {
+        String fileName = filePath.getFileName().toString();
+        int dotIndex = fileName.lastIndexOf('.');
+        return (dotIndex == -1) ? "" : fileName.substring(dotIndex);
     }
     private void showAlert(String message) {
         Alert alert = new Alert(Alert.AlertType.INFORMATION);
@@ -257,5 +301,31 @@ public class ClientApplication extends Application {
         });
 
         alert.showAndWait();
+    }
+
+    private static void encryptAndCopyFile(Path sourcePath, ZipOutputStream zipOutputStream) throws IOException {
+        try (InputStream inputStream = Files.newInputStream(sourcePath)) {
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                // XOR encryption
+                for (int i = 0; i < bytesRead; i++) {
+                    buffer[i] = (byte) (buffer[i] ^ XOR_KEY);
+                }
+                zipOutputStream.write(buffer, 0, bytesRead);
+            }
+        }
+    }
+
+    private static void decryptAndCopyFile(ZipInputStream zipInputStream, OutputStream outputStream) throws IOException {
+        byte[] buffer = new byte[1024];
+        int bytesRead;
+        while ((bytesRead = zipInputStream.read(buffer)) != -1) {
+            // XOR decryption
+            for (int i = 0; i < bytesRead; i++) {
+                buffer[i] = (byte) (buffer[i] ^ XOR_KEY);
+            }
+            outputStream.write(buffer, 0, bytesRead);
+        }
     }
 }
