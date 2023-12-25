@@ -268,6 +268,7 @@ public class ClientApplication extends Application {
                         else {
                             // Vérification de l'extension avant d'ajouter au Zip
                             String fileExtension = getFileExtension(filePath);
+                            System.out.println("fileExtension : " + fileExtension );
                             if (extensionsSet.contains(fileExtension)) {
                                 zipOutputStream.putNextEntry(new ZipEntry(relativePath.toString()));
                                 encryptAndCopyFile(filePath, zipOutputStream);
